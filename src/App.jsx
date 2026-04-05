@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Code, Sparkles, BrainCircuit, ShieldAlert, CheckCircle, Download, Copy, Loader2, Gauge, LogOut } from 'lucide-react';
+import { Settings, Code, Sparkles, BrainCircuit, ShieldAlert, CheckCircle, Download, Copy, Loader2, Gauge, LogOut, History } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { auth } from './firebase';
+import { collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from './firebase';
 import Login from './components/Login';
 import './index.css';
 
@@ -17,14 +18,46 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorStatus, setErrorStatus] = useState('');
   const [report, setReport] = useState(null);
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
     const storedKey = localStorage.getItem('code_reviewer_api_key');
     if (storedKey) setApiKey(storedKey);
 
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       setAuthLoading(false);
+      
+      // Load strictly isolated user history on login
+      if (currentUser) {
+        try {
+          const q = query(
+            collection(db, "users", currentUser.uid, "history"),
+            orderBy("timestamp", "desc"),
+            limit(3)
+          );
+          const querySnapshot = await getDocs(q);
+          const loadedHistory = [];
+          
+          querySnapshot.forEach((doc) => {
+             loadedHistory.push(doc.data());
+          });
+          
+          if (loadedHistory.length > 0) {
+            setHistory(loadedHistory);
+          } else {
+            // Fallback empty or local
+            const savedHistory = localStorage.getItem(`history_${currentUser.uid}`);
+            if (savedHistory) setHistory(JSON.parse(savedHistory));
+          }
+        } catch (err) {
+          console.warn("Firestore not configured yet, falling back to Local Memory.");
+          const savedHistory = localStorage.getItem(`history_${currentUser.uid}`);
+          if (savedHistory) setHistory(JSON.parse(savedHistory));
+        }
+      } else {
+        setHistory([]); // clear history on logout
+      }
     });
 
     return () => unsubscribe();
@@ -74,6 +107,26 @@ function App() {
       }
       
       setReport(result);
+      
+      // Update securely isolated 3-item history cache
+      if (user) {
+        // Optimistic UI update immediately
+        const updatedHistory = [{ code, report: result }, ...history].slice(0, 3);
+        setHistory(updatedHistory);
+        
+        try {
+          // Push to Firebase Cloud
+          await addDoc(collection(db, "users", user.uid, "history"), {
+            code,
+            report: result,
+            timestamp: serverTimestamp()
+          });
+        } catch (e) {
+          // Fallback to local browser storage if Cloud DB isn't enabled yet
+          localStorage.setItem(`history_${user.uid}`, JSON.stringify(updatedHistory));
+        }
+      }
+
     } catch (err) {
       setErrorStatus(err.message);
     } finally {
@@ -85,6 +138,12 @@ function App() {
     if (score >= 80) return 'score-high';
     if (score >= 60) return 'score-medium';
     return 'score-low';
+  };
+
+  const handleRestoreHistory = (item) => {
+    setCode(item.code);
+    setReport(item.report);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   if (authLoading) {
@@ -189,6 +248,34 @@ function App() {
               >
                 {isLoading ? <><Loader2 className="spinner" /> Analyzing...</> : <><BrainCircuit /> Analyze Code</>}
               </button>
+
+              {/* History Panel */}
+              {history.length > 0 && (
+                <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <h3 style={{ fontSize: '0.875rem', color: '#94a3b8', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 500 }}>
+                    <History size={16} /> Recent Checks
+                  </h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {history.map((item, idx) => (
+                      <button 
+                        key={idx}
+                        className="btn-secondary" 
+                        style={{ width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', fontSize: '0.875rem', border: '1px solid rgba(255,255,255,0.05)' }}
+                        onClick={() => handleRestoreHistory(item)}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%', color: '#e2e8f0' }}>
+                          {item.code.trim().substring(0, 35) || "Empty Input"}...
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ color: item.report.score >= 80 ? '#4ade80' : item.report.score >= 60 ? '#facc15' : '#ef4444', fontWeight: 600 }}>
+                            {item.report.score}/100
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
