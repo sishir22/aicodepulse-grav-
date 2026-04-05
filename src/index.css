@@ -289,3 +289,18 @@ a:hover { color: var(--accent-hover); }
   border-top: 1px solid var(--panel-border);
   color: var(--text-secondary);
 }
+
+/* Auth Styles */
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+.login-card {
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+  text-align: center;
+}
